@@ -228,9 +228,9 @@ fn logout(user_session: Option<UserSession>, cookies: &CookieJar<'_>) -> Redirec
         }).to_string());
 
         // Clear cookies
-        cookies.remove_private(rocket::http::Cookie::named("user_id"));
-        cookies.remove_private(rocket::http::Cookie::named("nickname"));
-        cookies.remove_private(rocket::http::Cookie::named("room_id"));
+        cookies.remove_private("user_id");
+        cookies.remove_private("nickname");
+        cookies.remove_private("room_id");
     }
 
     Redirect::to(uri!(index(None::<&str>)))
@@ -244,8 +244,49 @@ struct ChatSocketHandler {
     nickname: String,
 }
 
+impl ChatSocketHandler {
+    fn new(sender: Sender, handshake: &Handshake) -> Self {
+        // Extract room_id from URL path
+        let path = handshake.request.resource();
+        let room_id = if path.starts_with('/') && path.len() > 1 {
+            path[1..].to_string() // Remove leading '/'
+        } else {
+            "lobby".to_string()
+        };
+
+        // Parse cookies to get user info
+        let mut user_id = Uuid::new_v4().to_string();
+        let mut nickname = format!("User-{}", sender.connection_id());
+
+        // Try to extract user info from cookies
+        if let Some(cookie_header) = handshake.request.header("Cookie") {
+            if let Ok(cookie_str) = std::str::from_utf8(cookie_header) {
+                for cookie in cookie_str.split(';') {
+                    let parts: Vec<&str> = cookie.trim().split('=').collect();
+                    if parts.len() == 2 {
+                        match parts[0] {
+                            "user_id" => user_id = parts[1].to_string(),
+                            "nickname" => nickname = parts[1].to_string(),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        ChatSocketHandler {
+            sender,
+            room_id,
+            user_id,
+            nickname,
+        }
+    }
+}
+
 impl Handler for ChatSocketHandler {
-    fn on_open(&mut self, _: Handshake) -> ws::Result<()> {
+    fn on_open(&mut self, handshake: Handshake) -> ws::Result<()> {
+        // Update handler with handshake info if needed
+        *self = ChatSocketHandler::new(self.sender.clone(), &handshake);
         let room_state = CHAT_STATE.get_or_create_room(&self.room_id);
 
         // Add connection to the room
@@ -426,18 +467,11 @@ impl ChatSocketHandler {
 fn start_websocket_server() {
     thread::spawn(|| {
         listen("0.0.0.0:8082", |out| {
-            // Extract room_id and user info from the request
-            // In a real app, you'd parse cookies or query parameters
-            // For now, we'll use placeholders
-            let room_id = "lobby".to_string();
-            let user_id = Uuid::new_v4().to_string();
-            let nickname = format!("User-{}", out.connection_id());
-
             ChatSocketHandler {
                 sender: out,
-                room_id,
-                user_id,
-                nickname,
+                room_id: String::new(), // Will be set in on_open
+                user_id: String::new(), // Will be set in on_open
+                nickname: String::new(), // Will be set in on_open
             }
         }).unwrap();
     });
@@ -737,12 +771,15 @@ fn rocket() -> _ {
             const input = document.getElementById("message-input");
             const message = input.value.trim();
 
-            if (message) {
+            if (message && ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     content: message
                 }));
 
                 input.value = "";
+            } else if (message && (!ws || ws.readyState !== WebSocket.OPEN)) {
+                console.log("WebSocket not connected, attempting to reconnect...");
+                connect();
             }
         }
 

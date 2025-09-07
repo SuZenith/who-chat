@@ -141,7 +141,7 @@ fn index(rid: Option<&str>, user_session: Option<UserSession>) -> Template {
                 room_id: room_id.clone(),
                 nickname: session.nickname,
                 title: format!("Chat Room: {}", room_id),
-                ws_url: format!("ws://localhost:8082/{}", room_id),
+                ws_path: format!("/{}", room_id),
             })
         },
         _ => {
@@ -425,7 +425,7 @@ impl ChatSocketHandler {
 // Start a WebSocket server in a separate thread
 fn start_websocket_server() {
     thread::spawn(|| {
-        listen("127.0.0.1:8082", |out| {
+        listen("0.0.0.0:8082", |out| {
             // Extract room_id and user info from the request
             // In a real app, you'd parse cookies or query parameters
             // For now, we'll use placeholders
@@ -652,7 +652,9 @@ fn rocket() -> _ {
     <script>
         const nickname = "{{ nickname }}";
         const roomId = "{{ room_id }}";
-        const wsUrl = "{{ ws_url }}";
+        const wsPath = "{{ ws_path }}";
+        // Use port 8082 for WebSocket connections
+        const wsUrl = "ws://" + window.location.hostname + ":8082" + wsPath;
 
         let ws;
 
